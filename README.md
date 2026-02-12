@@ -22,7 +22,7 @@ pip install -r requirements.txt
 3. Set the Gemini API key in the current terminal session (optional — the grader falls back if missing):
 
 ```powershell
-$env:GEMINI_API_KEY = "AIzaSyCMkXHiRIiRY5WaupfB1wJjJBySgplTeu8"
+$env:GEMINI_API_KEY = ""
 ```
 
 4. Run the app (example):
@@ -62,3 +62,4 @@ gh repo create <repo> --public --source=. --remote=origin --push
 
 - See `utils/gemini_grading.py` for grade logic; it will use the Gemini API if `GEMINI_API_KEY` is present and configured, otherwise it uses a fallback grader.
 - Add a `.env` file locally for convenience but do not commit it.
+
