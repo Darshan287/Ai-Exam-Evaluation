@@ -7,7 +7,7 @@ print("=" * 70)
 print("MongoDB COMPASS CONNECTION INFORMATION")
 print("=" * 70)
 
-connection_string = "mongodb+srv://sheshagirijoshi18_db_user:Shesha-123-db@myapplicationcluster.kjlncpc.mongodb.net/"
+connection_string = " "
 database_name = "exam_evaluator"
 
 print(f"\n📌 CONNECTION STRING (copy this):")
@@ -73,3 +73,4 @@ except Exception as e:
     print(f"\n❌ Error: {e}")
 
 print("\n" + "=" * 70)
+
