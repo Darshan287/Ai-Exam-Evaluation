@@ -1,0 +1,256 @@
+        logger.debug(f"Extracted text from PDF: {len(full_text)} characters")
+        return full_text
+    except Exception as e:
+        logger.error(f"Error extracting text from PDF: {e}")
+        # Return a more explicit error message for troubleshooting
+        return f"[Error processing PDF: {str(e)}]"
+
+def process_file(file_path, is_handwritten=True):
+    """
+    Process an uploaded file (PDF or image) to extract text
+    
+    Args:
+        file_path: Path to the file to process
+        is_handwritten: Boolean indicating if the document contains handwritten text
+                      Default is True to enable handwritten text optimizations
+    
+    Returns:
+        Extracted text from the file
+    """
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
+    # Log the processing attempt
+    logger.info(f"Processing file: {file_path} (Handwritten: {is_handwritten})")
+    
+    # EMERGENCY FIX: Use fallback method for all PDF files if we're in a limited environment
+    if file_ext == '.pdf':
+        try:
+            # Try to use pdfminer first (no OCR, just text extraction, minimal memory use)
+            logger.info("Using direct PDF text extraction (no OCR) to avoid memory issues")
+            from pdfminer.high_level import extract_text
+            extracted_text = extract_text(file_path)
+            
+            if len(extracted_text.strip()) > 50:
+                logger.info("Successfully extracted text directly from PDF")
+                return extracted_text
+            
+            # If pdfminer failed to extract meaningful text, try a very simple extraction
+            with open(file_path, 'rb') as pdf_file:
+                # Read content and filter out NULL bytes and other problematic characters
+                raw_content = pdf_file.read()
+                # Filter out NULL bytes before decoding
+                filtered_content = bytearray([b for b in raw_content if b != 0])
+                text_content = filtered_content.decode('utf-8', errors='ignore')
+                
+                # Clean the text further
+                import re
+                # Remove control characters except newlines and tabs
+                text_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text_content)
+                simple_text = ' '.join(text_content.split())
+                
+                if len(simple_text) > 100:
+                    logger.info("Used simple text extraction as fallback")
+                    return simple_text
+                
+            # As a last resort, return a placeholder message instead of running full OCR
+            # This prevents memory errors while still allowing the system to function
+            logger.warning("Unable to extract text from PDF, returning placeholder to avoid memory issues")
+            return f"[TEXT EXTRACTION FROM {os.path.basename(file_path)}]\n" + \
+                   "This PDF appears to contain primarily handwritten or image-based content.\n" + \
+                   "Please note that the system has extracted only basic metadata to avoid memory issues.\n" + \
+                   "For better results, consider uploading individual image files of each page."
+                
+        except Exception as e:
+            logger.error(f"Error in emergency text extraction: {e}")
+            return f"[Error processing PDF: Memory safe mode enabled]\nPlease try uploading image files instead."
+            
+    elif file_ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']:
+        try:
+            # For single images, we can still try OCR with reduced parameters
+            # Get image dimensions
+            from PIL import Image
+            img = Image.open(file_path)
+            width, height = img.size
+            
+            # If the image is very large, just return a placeholder
+            if width > 2000 or height > 2000:
+                logger.warning(f"Image is too large ({width}x{height}), skipping OCR to avoid memory issues")
+                return f"[Image size: {width}x{height}]\nThe image is too large for OCR processing.\nPlease resize the image to below 2000x2000 pixels for better results."
+            
+            # For smaller images, use the optimized OCR extraction
+            return extract_text_from_image(file_path)
+        except Exception as e:
+            logger.error(f"Error processing image: {e}")
+            return f"[Error processing image: {str(e)}]"
+    else:
+        logger.error(f"Unsupported file format: {file_ext}")
+        return ""
+
+def save_uploaded_file(uploaded_file, upload_folder):
+    """Save an uploaded file and return the path"""
+    filename = secure_filename(uploaded_file.filename)
+    file_path = os.path.join(upload_folder, filename)
+    uploaded_file.save(file_path)
+    logger.debug(f"Saved uploaded file to {file_path}")
+    return file_path
+
+def extract_text_segments(text, num_questions):
+    """
+    Attempt to segment extracted text into different answers
+    based on question numbers or patterns
+    """
+    try:
+        # Remove any page markers from OCR
+        text = re.sub(r'--- Page \d+ ---', '', text)
+        
+        # Try multiple segmentation strategies
+        logger.debug(f"Attempting to segment text into {num_questions} answers")
+        
+        # Strategy 1: Split by question number patterns (Q1, Q2, Question 1, etc.)
+        segments = segment_by_question_markers(text, num_questions)
+        
+        # Strategy 2: If first strategy failed, try to identify segments by looking for 
+        # any number followed by a period or parenthesis
+        if len(segments) != num_questions:
+            logger.debug("First segmentation strategy failed, trying alternate pattern matching")
+            segments = segment_by_number_indicators(text, num_questions)
+        
+        # Strategy 3: If still unsuccessful, try to split by paragraph breaks
+        if len(segments) != num_questions:
+            logger.debug("Second segmentation strategy failed, trying paragraph separation")
+            segments = segment_by_paragraphs(text, num_questions)
+        
+        # Final fallback: If all else fails, just divide the text equally
+        if len(segments) != num_questions:
+            logger.warning(f"All segmentation strategies failed. Using equal division of text.")
+            segments = segment_equally(text, num_questions)
+            
+        # Ensure we return exactly num_questions segments
+        if len(segments) < num_questions:
+            # If we have too few segments, duplicate the last one
+            last_segment = segments[-1] if segments else "No text available"
+            while len(segments) < num_questions:
+                segments.append(f"{last_segment} (continued)")
+        
+        return segments[:num_questions]
+        
+    except Exception as e:
+        logger.error(f"Error in text segmentation: {e}")
+        # Return basic segments if all else fails
+        return ["Error segmenting text"] * num_questions
+
+def segment_by_question_markers(text, num_questions):
+    """Strategy 1: Look for typical question markers"""
+    lines = text.split('\n')
+    segments = []
+    current_segment = ""
+    current_question = 1
+    
+    for line in lines:
+        # Check for question number indicators
+        question_indicators = [
+            f"Q{current_question}", 
+            f"Question {current_question}", 
+            f"{current_question}.", 
+            f"{current_question})",
+            f"#{current_question}"
+        ]
+        
+        if any(indicator in line for indicator in question_indicators) and current_segment and current_question <= num_questions:
+            segments.append(current_segment.strip())
+            current_segment = line
+            current_question += 1
+        else:
+            current_segment += f"\n{line}"
+    
+    # Add the last segment
+    if current_segment.strip():
+        segments.append(current_segment.strip())
+    
+    return segments
+
+def segment_by_number_indicators(text, num_questions):
+    """Strategy 2: Look for any numbers that might indicate questions"""
+    # Pattern to match numbers at the beginning of a line, followed by period/parenthesis
+    pattern = r'\n\s*(\d+)[\.\)\:]'
+    
+    # Find all matches
+    matches = list(re.finditer(pattern, text))
+    
+    if not matches:
+        return []
+    
+    segments = []
+    for i in range(len(matches)):
+        start_pos = matches[i].start()
+        
+        # Determine end position
+        if i < len(matches) - 1:
+            end_pos = matches[i+1].start()
+        else:
+            end_pos = len(text)
+        
+        # Extract the segment
+        segment = text[start_pos:end_pos].strip()
+        segments.append(segment)
+    
+    return segments
+
+def segment_by_paragraphs(text, num_questions):
+    """Strategy 3: Split by paragraph breaks (double newlines)"""
+    # Split text by double newlines (paragraphs)
+    paragraphs = re.split(r'\n\s*\n', text)
+    
+    # Filter out empty paragraphs
+    paragraphs = [p for p in paragraphs if p.strip()]
+    
+    if len(paragraphs) < num_questions:
+        return []
+    
+    # If we have more paragraphs than questions, combine some
+    if len(paragraphs) > num_questions:
+        # Calculate how many paragraphs per question on average
+        paras_per_question = len(paragraphs) // num_questions
+        
+        segments = []
+        for i in range(num_questions - 1):
+            start_idx = i * paras_per_question
+            end_idx = (i + 1) * paras_per_question
+            segment = "\n\n".join(paragraphs[start_idx:end_idx])
+            segments.append(segment)
+        
+        # Last segment gets all remaining paragraphs
+        last_segment = "\n\n".join(paragraphs[(num_questions - 1) * paras_per_question:])
+        segments.append(last_segment)
+        
+        return segments
+    
+    # If we have exactly the right number of paragraphs
+    return paragraphs
+
+def segment_equally(text, num_questions):
+    """Final fallback: Just divide the text into equal parts"""
+    text_length = len(text)
+    chunk_size = text_length // num_questions
+    segments = []
+    
+    for i in range(num_questions):
+        start = i * chunk_size
+        end = min((i + 1) * chunk_size, text_length)
+        
+        # Try to avoid cutting words
+        if i > 0 and start > 0:
+            # Look for the nearest space before this position
+            space_pos = text.rfind(' ', 0, start)
+            if space_pos > start - 50:  # Don't move back too far
+                start = space_pos + 1
+        
+        if i < num_questions - 1 and end < text_length:
+            # Look for the nearest space after this position
+            space_pos = text.find(' ', end)
+            if space_pos != -1 and space_pos < end + 50:  # Don't move forward too far
+                end = space_pos
+        
+        segments.append(text[start:end])
+    
+    return segments
