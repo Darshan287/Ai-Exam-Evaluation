@@ -19,7 +19,7 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_REFRESH_EACH_REQUEST"] = True  # Keep session alive during use
 
 # Configure MongoDB Atlas connection
-MONGODB_URI = 'mongodb+srv://sheshagirijoshi18_db_user:Shesha-123-db@myapplicationcluster.kjlncpc.mongodb.net/exam_evaluator?retryWrites=true&w=majority'
+MONGODB_URI = ' '
 
 # Connect to MongoDB with more lenient settings
 db = connect(
